@@ -1,0 +1,90 @@
+#Clustering - using VST
+# Load required libraries
+library(DESeq2)
+library(readxl)
+library(pheatmap)
+library(ggplot2)
+library(RColorBrewer)
+library(dynamicTreeCut)
+library(limma)
+
+# --- Set working directory ---
+setwd("C:/Users/topbe075/OneDrive - University of Otago/MyFiles/PhD/Janice downloads/Count matrix/Filtered counts")
+
+# --- Load count data ---
+file_list <- list.files(pattern = "*.txt")
+all_data <- list()
+
+for (file in file_list) {
+  data <- read.table(file, header = FALSE, sep = " ", stringsAsFactors = FALSE)
+  if (ncol(data) != 2) {
+    cat("Error: File", file, "does not have exactly 2 columns.\n")
+    next
+  }
+  colnames(data) <- c("Gene_ID", "Count")
+  data$Count <- as.numeric(data$Count)
+  rownames(data) <- data$Gene_ID
+  data <- data[, "Count", drop = FALSE]
+  all_data[[file]] <- data
+}
+
+# Combine into matrix
+combined_data <- do.call(cbind, all_data)
+combined_data <- apply(combined_data, 2, as.numeric)
+rownames(combined_data) <- rownames(all_data[[1]])
+colnames(combined_data) <- gsub(".txt", "", basename(file_list))
+
+# --- Load metadata ---
+sample_matrix <- read_excel("C:/Users/topbe075/OneDrive - University of Otago/MyFiles/PhD/Janice downloads/Sample_matrix.xlsx")
+sample_matrix <- sample_matrix[sample_matrix$SampleID %in% colnames(combined_data), ]
+combined_data <- combined_data[, sample_matrix$SampleID]
+
+sample_matrix$Condition <- factor(sample_matrix$Condition)
+sample_matrix$Batch <- factor(sample_matrix$Batch)
+
+# --- DESeq2 setup ---
+dds <- DESeqDataSetFromMatrix(countData = combined_data,
+                              colData = sample_matrix,
+                              design = ~ Batch + Condition)
+dds <- dds[rowSums(counts(dds) >= 10) > 0, ]
+dds <- DESeq(dds)
+
+# --- Variance stabilizing transformation ---
+vsd <- vst(dds, blind = FALSE)
+vsd_mat <- assay(vsd)
+
+# --- Remove batch effect (only for visualization) ---
+vsd_corrected <- removeBatchEffect(vsd_mat, batch = sample_matrix$Batch)
+
+# --- Top 1000 variable genes ---
+row_var <- apply(vsd_corrected, 1, var)
+top_genes <- order(row_var, decreasing = TRUE)[1:1000]
+vsd_top <- vsd_corrected[top_genes, ]
+
+# --- Euclidean distance + hierarchical clustering ---
+sample_dist <- dist(t(vsd_top), method = "euclidean")
+hc_samples <- hclust(sample_dist, method = "complete")
+
+# --- Dynamic tree cutting on samples ---
+sample_clusters <- cutreeDynamic(dendro = hc_samples, distM = as.matrix(sample_dist),
+                                 deepSplit = 2, pamRespectsDendro = FALSE, minClusterSize = 2)
+
+# --- Prepare annotation ---
+annotation_df <- data.frame(
+  Condition = sample_matrix$Condition,
+  SampleCluster = as.factor(sample_clusters)
+)
+rownames(annotation_df) <- sample_matrix$SampleID
+annotation_df <- annotation_df[colnames(vsd_top), , drop = FALSE]
+
+# --- Heatmap ---
+pheatmap(vsd_top,
+         cluster_rows = TRUE,
+         cluster_cols = hc_samples,
+         annotation_col = annotation_df,
+         show_rownames = FALSE,
+         scale = "row",
+         color = colorRampPalette(rev(brewer.pal(9, "RdBu")))(255),
+         main = "Clustering by Condition")
+         
+         
