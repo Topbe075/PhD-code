@@ -1,0 +1,161 @@
+#Concat fq files
+file1=/HANGER/ben/L01/BarcodeiMUDI429/*fq.gz
+
+for file in $file1
+do
+outfile="${file/%.fq.gz/_cat.fq.gz}"
+outfile="${outfile##*/}"
+outfile="${outfile/L01_/}"
+file2=$(echo "$file" | sed 's/L01/L02/g')
+cat $file $file2 > $outfile
+done
+
+file1=/HANGER/ben/L01/BarcodeiMUDI430/*fq.gz
+
+for file in $file1
+do
+outfile="${file/%.fq.gz/_cat.fq.gz}"
+outfile="${outfile##*/}"
+outfile="${outfile/L01_/}"
+file2=$(echo "$file" | sed 's/L01/L02/g')
+cat $file $file2 > $outfile
+done
+
+file1=/HANGER/ben/L01/BarcodeiMUDI431/*fq.gz
+
+for file in $file1
+do
+outfile="${file/%.fq.gz/_cat.fq.gz}"
+outfile="${outfile##*/}"
+outfile="${outfile/L01_/}"
+file2=$(echo "$file" | sed 's/L01/L02/g')
+cat $file $file2 > $outfile
+done
+
+#Removing adapters
+input_dir=/HANGER/ben/Trimming/
+output_dir=/HANGER/ben/Trimmed/
+
+log_file="${output_dir}/trimmomatic_log.txt"
+
+for forward in ${input_dir}/*_1_cat.fq.gz; do
+    # Get the base name (e.g., V350231822_A04)
+    base_name=$(basename ${forward} "_1_cat.fq.gz")
+    
+    reverse="${input_dir}/${base_name}_2_cat.fq.gz"
+    
+    forward_paired="${output_dir}/${base_name}_forward_paired_trimmed.fq.gz"
+    forward_unpaired="${output_dir}/${base_name}_forward_unpaired_trimmed.fq.gz"
+    reverse_paired="${output_dir}/${base_name}_reverse_paired_trimmed.fq.gz"
+    reverse_unpaired="${output_dir}/${base_name}_reverse_unpaired_trimmed.fq.gz"
+
+    nohup java -jar /home/ben/Trimmomatic-0.39/trimmomatic-0.39.jar PE \
+        ${forward} ${reverse} \
+        ${forward_paired} ${forward_unpaired} \
+        ${reverse_paired} ${reverse_unpaired} \
+        ILLUMINACLIP:TruSeq3-PE-2.fa:2:30:10:2:True \
+        LEADING:3 TRAILING:3 MINLEN:36 \
+        >> ${log_file} 2>&1 &
+        
+done
+
+#Removing barcodes
+input_dir="/HANGER/ben/Trimmed/"
+output_dir="/HANGER/ben/no_barcodes/"
+
+log_file="$output_dir/trim_script_log.txt"
+echo "Trimming started at $(date)" > "$log_file"
+
+for file in $input_dir/*_trimmed.fq.gz; do
+    if [[ -f "$file" && "$file" == *"_trimmed.fq.gz" ]]; then
+        echo "Processing file: $file" | tee -a "$log_file"
+        
+        output_file="$output_dir/$(basename "$file")"
+        
+        nohup java -jar /home/ben/Trimmomatic-0.39/trimmomatic-0.39.jar SE -phred33 "$file" "$output_file" HEADCROP:9 >> "$log_file" 2>&1 &
+
+        echo "Started trimming: $file, saving to: $output_file" | tee -a "$log_file"
+    else
+        echo "Skipping file (does not match pattern): $file" | tee -a "$log_file"
+    fi
+done
+
+wait
+
+echo "All files processed at $(date)" | tee -a "$log_file"
+
+#Indexing genome
+STAR --runThreadN 8 \
+     --runMode genomeGenerate \
+     --genomeDir /HANGER/ben/hg38/hg38-index1/ \
+     --genomeFastaFiles /HANGER/ben/hg38/GRCh38.p14.genome.fa \
+     --sjdbGTFfile /HANGER/ben/hg38/hg38.genecode.comprehensive-annotation.gtf \
+     --sjdbOverhang 100
+
+#Aligning to genome
+input_dir="/HANGER/ben/no_barcodes/Paired_only"
+genome_dir="/HANGER/ben/hg38/hg38-index1_used/"
+output_dir="/HANGER/ben/Aligns_genome/"
+
+for forward_file in $input_dir/*forward*trimmed.fq.gz; do
+    if [[ -f "$forward_file" ]]; then
+        reverse_file="${forward_file/forward/reverse}"
+
+        if [[ -f "$reverse_file" ]]; then
+            base_name=$(basename "$forward_file" | sed 's/_forward.*//')
+
+            echo "Aligning $forward_file and $reverse_file ..."
+
+            STAR --runThreadN 20 \
+                --genomeDir "$genome_dir" \
+                --readFilesIn "$forward_file" "$reverse_file" \
+                --outFileNamePrefix "$output_dir/$base_name" \
+                --readFilesCommand zcat \
+                --outSAMtype BAM SortedByCoordinate \
+                --quantMode GeneCounts
+
+            echo "Finished aligning $base_name"
+        else
+            echo "No reverse file found for $forward_file, skipping ..."
+
+        fi
+    fi
+done
+
+echo "All files processed."
+
+#FeatureCounts
+featureCounts -p --countReadPairs -t exon -g gene_id -a /HANGER/ben/hg38_genome/hg38.genecode.comprehensive-annotation.gtf -o counts.txt /HANGER/ben/Align_genome/sorted_Bam/*sorted.bam
+
+#Creating data matrix
+input_dir="/HANGER/ben/Aligns_genome/"
+output_dir="/HANGER/ben/Data_matrix/"
+
+for file in "$input_dir"/*ReadsPerGene.out.tab; do
+    # Get the base name of the file (without the directory path)
+    base_name=$(basename "$file" .ReadsPerGene.out.tab)
+    
+    awk '{print $1, $4}' "$file" > "$output_dir/${base_name}ReadsPerGene.txt"
+    
+    echo "Processed $base_name"
+done
+
+echo "All files processed."
+
+#Removing unassigned, multimapped, no feature and ambiguous reads
+path <- "C:/Users/topbe075/OneDrive - University of Otago/MyFiles/PhD/Janice downloads/Count matrix"
+
+txt_files <- list.files(path, pattern = "\\.txt$", full.names = TRUE)
+
+for (file in txt_files) {
+  data <- read.table(file, header = TRUE, skip = 4, sep = "\t", stringsAsFactors = FALSE)
+  
+  new_file <- file.path(path, paste0(tools::file_path_sans_ext(basename(file)), "_filtered.txt"))
+  
+  write.table(data, file = new_file, sep = "\t", quote = FALSE, row.names = FALSE)
+}
+
+cat("Filtered copies saved with '_filtered.txt' suffix in the same folder.\n")
+
+#FASTqc reports
+fastqc -o FASTqc/ concat_fq/*
