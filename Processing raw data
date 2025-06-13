@@ -39,7 +39,7 @@ output_dir=/HANGER/ben/Trimmed/
 log_file="${output_dir}/trimmomatic_log.txt"
 
 for forward in ${input_dir}/*_1_cat.fq.gz; do
-    # Get the base name (e.g., V350231822_A04)
+    
     base_name=$(basename ${forward} "_1_cat.fq.gz")
     
     reverse="${input_dir}/${base_name}_2_cat.fq.gz"
@@ -132,7 +132,7 @@ input_dir="/HANGER/ben/Aligns_genome/"
 output_dir="/HANGER/ben/Data_matrix/"
 
 for file in "$input_dir"/*ReadsPerGene.out.tab; do
-    # Get the base name of the file (without the directory path)
+   
     base_name=$(basename "$file" .ReadsPerGene.out.tab)
     
     awk '{print $1, $4}' "$file" > "$output_dir/${base_name}ReadsPerGene.txt"
